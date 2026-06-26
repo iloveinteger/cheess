@@ -242,7 +242,7 @@ h1 {
 
 .boardArrow {
   stroke: rgba(255, 193, 7, 0.72);
-  stroke-width: 3.2;
+  stroke-width: 2.4;
   stroke-linecap: round;
   marker-end: url("#arrowHead");
 }

@@ -163,10 +163,6 @@ export function App() {
         return;
       }
     }
-    if (mode === "normal" && shouldAnnotateClick(square)) {
-      cycleAnnotation(square);
-      return;
-    }
     if (!canMoveCurrentTurn) return;
 
     if (mode === "infinite") {
@@ -246,17 +242,38 @@ export function App() {
   };
 
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>, square: Square) => {
-    if (mode !== "normal" || event.button !== 0) {
+    if (mode !== "normal") {
+      return;
+    }
+    if (event.button === 2) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setSelected(null);
+      setRoyalChoices(null);
+      setDrag({
+        purpose: "arrow",
+        from: square,
+        pointerId: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        startX: event.clientX,
+        startY: event.clientY,
+        to: square,
+        active: false
+      });
+      return;
+    }
+    if (event.button !== 0) {
       return;
     }
     const piece = state.board[square.y][square.x];
-    event.currentTarget.setPointerCapture(event.pointerId);
     const isPlayablePiece = Boolean(piece?.color === state.turn && canMoveCurrentTurn);
-    if (isPlayablePiece) {
-      setSelected(square);
+    if (!isPlayablePiece) {
+      return;
     }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setSelected(square);
     setDrag({
-      purpose: isPlayablePiece ? "move" : "arrow",
+      purpose: "move",
       from: square,
       pointerId: event.pointerId,
       x: event.clientX,
@@ -298,6 +315,8 @@ export function App() {
       } else if (drop && drag.purpose === "arrow" && !sameSquare(drag.from, drop)) {
         toggleArrow(drag.from, drop);
       }
+    } else if (drag.purpose === "arrow") {
+      cycleAnnotation(drag.from);
     }
   };
 
@@ -390,18 +409,6 @@ export function App() {
     restart();
   };
 
-  const shouldAnnotateClick = (square: Square) => {
-    const piece = state.board[square.y][square.x];
-    if (!selected) {
-      return piece?.color !== state.turn;
-    }
-    const destinationMoves = selectedMoves.filter((move) => {
-      const destination = moveToSquare(move);
-      return destination ? sameSquare(destination, square) : false;
-    });
-    return destinationMoves.length === 0 && royalMovesForQueenDrop(legalMoves, selected, square).length === 0;
-  };
-
   return (
     <main className="app">
       <section className="topbar">
@@ -436,7 +443,7 @@ export function App() {
           <div className="files topFiles">{["a", "b", "c", "d", "e", "f", "g", "h"].map((file) => <span key={file}>{file}</span>)}</div>
           <div className="boardRow">
             <div className="ranks">{[8, 7, 6, 5, 4, 3, 2, 1].map((rank) => <span key={rank}>{rank}</span>)}</div>
-            <div className="board" ref={boardRef} aria-label="Meme Chess board">
+            <div className="board" ref={boardRef} onContextMenu={(event) => event.preventDefault()} aria-label="Meme Chess board">
               {state.board.flatMap((row, y) =>
                 row.map((piece, x) => {
                   const square = { x, y };
@@ -484,8 +491,16 @@ export function App() {
               )}
               <svg className="arrowLayer" viewBox="0 0 100 100" aria-hidden="true">
                 <defs>
-                  <marker id="arrowHead" markerWidth="4.5" markerHeight="4.5" refX="3.4" refY="2.25" orient="auto">
-                    <path d="M0,0 L4.5,2.25 L0,4.5 Z" />
+                  <marker
+                    id="arrowHead"
+                    markerWidth="4"
+                    markerHeight="4"
+                    refX="3.4"
+                    refY="2"
+                    orient="auto"
+                    markerUnits="userSpaceOnUse"
+                  >
+                    <path d="M0,0 L4,2 L0,4 Z" />
                   </marker>
                 </defs>
                 {[...arrows, ...previewArrows(drag)].map((arrow) => {
@@ -592,7 +607,7 @@ export function App() {
         </div>
       )}
 
-      {drag?.active && (
+      {drag?.active && drag.purpose === "move" && (
         <div className={`dragPiece ${state.board[drag.from.y][drag.from.x]!.color}`} style={{ left: drag.x, top: drag.y }} aria-hidden="true">
           {filledPieceSymbol(state.board[drag.from.y][drag.from.x]!.type)}
         </div>
@@ -754,7 +769,7 @@ function arrowLine(from: Square, to: Square) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   const length = Math.hypot(dx, dy) || 1;
-  const shorten = 4.8;
+  const shorten = 3.6;
   return {
     x1: start.x + (dx / length) * shorten,
     y1: start.y + (dy / length) * shorten,
