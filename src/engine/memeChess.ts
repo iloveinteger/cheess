@@ -173,7 +173,7 @@ export function applyMove(state: GameState, move: Move): GameState {
     next.board[move.to.y][move.to.x] = {
       ...piece,
       type: move.kind === "promotion" ? move.promoteTo : piece.type,
-      hasMoved: true
+      hasMoved: move.kind === "promotion" && move.promoteTo === "king" ? false : true
     };
 
     if (

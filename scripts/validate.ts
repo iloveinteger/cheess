@@ -96,6 +96,29 @@ function anyUnmovedKingCanCastleWithUnmovedRook() {
   );
 }
 
+function promotedKingCanCastleWithUnmovedRook() {
+  const state = buildStateForTest([
+    { square: at(4, 1), piece: piece("w1", "white", "pawn") },
+    { square: at(0, 0), piece: piece("w2", "white", "rook") },
+    { square: at(7, 7), piece: piece("b1", "black", "rook") }
+  ]);
+  const promotion = findMove(getLegalMoves(state), "promotion", (candidate) => candidate.promoteTo === "king");
+  assert(promotion, "pawn should be able to promote to a king");
+  const promoted = applyMove(state, promotion);
+  const blackPass = findMove(getLegalMoves(promoted), "move", () => true);
+  assert(blackPass, "black should have a pass-through move for this validation");
+  const whiteToMove = applyMove(promoted, blackPass);
+  const castle = generateCastlingMoves(whiteToMove).find(
+    (move) =>
+      move.kind === "castle" &&
+      move.kingFrom.x === 4 &&
+      move.kingFrom.y === 0 &&
+      move.rookFrom.x === 0 &&
+      move.rookFrom.y === 0
+  );
+  assert(castle, "a promoted king should retain fresh castling rights until it moves");
+}
+
 function infiniteBishopDeploysFromOffBoard() {
   const state = buildStateForTest([
     { square: at(0, 7), piece: piece("w1", "white", "rook") },
@@ -141,6 +164,7 @@ const tests = [
   kingCanBeCaptured,
   pawnCanPromoteToKing,
   anyUnmovedKingCanCastleWithUnmovedRook,
+  promotedKingCanCastleWithUnmovedRook,
   infiniteBishopDeploysFromOffBoard,
   royalReproductionSpawnsPawn,
   stalemateReturnsDraw
