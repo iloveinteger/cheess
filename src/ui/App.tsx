@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import {
   applyMove,
   countPieces,
@@ -20,6 +20,23 @@ import {
 
 type Mode = "normal" | "infinite" | "royal";
 
+interface DragState {
+  from: Square;
+  pointerId: number;
+  x: number;
+  y: number;
+  startX: number;
+  startY: number;
+  active: boolean;
+}
+
+interface BishopAnimation {
+  id: number;
+  from: Square;
+  to: Square;
+  color: Color;
+}
+
 const PIECE_LABELS: Record<PieceType, string> = {
   king: "King",
   queen: "Queen",
@@ -30,11 +47,16 @@ const PIECE_LABELS: Record<PieceType, string> = {
 };
 
 export function App() {
+  const boardRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<GameState>(() => createInitialState());
   const [history, setHistory] = useState<GameState[]>([]);
   const [selected, setSelected] = useState<Square | null>(null);
   const [mode, setMode] = useState<Mode>("normal");
   const [pendingPromotion, setPendingPromotion] = useState<Move[] | null>(null);
+  const [lastMoveSquares, setLastMoveSquares] = useState<Square[]>([]);
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [suppressClick, setSuppressClick] = useState(false);
+  const [bishopAnimation, setBishopAnimation] = useState<BishopAnimation | null>(null);
 
   const legalMoves = useMemo(() => getPlayableMoves(state), [state]);
   const result = useMemo(() => detectGameResult(state), [state]);
@@ -48,14 +70,34 @@ export function App() {
     if (result.status !== "active") {
       return;
     }
+    const animation =
+      move.kind === "infiniteBishop"
+        ? {
+            id: Date.now(),
+            from: move.spawn,
+            to: move.to,
+            color: state.turn
+          }
+        : null;
     setHistory((current) => [...current, state]);
     setState(applyMove(state, move));
+    setLastMoveSquares(moveSquares(move));
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
+    if (animation) {
+      setBishopAnimation(animation);
+      window.setTimeout(() => {
+        setBishopAnimation((current) => (current?.id === animation.id ? null : current));
+      }, 760);
+    }
   };
 
   const onSquareClick = (square: Square) => {
+    if (suppressClick) {
+      setSuppressClick(false);
+      return;
+    }
     if (result.status !== "active") {
       return;
     }
@@ -95,6 +137,81 @@ export function App() {
     }
   };
 
+  const playMoveToSquare = (from: Square, to: Square) => {
+    const sourceMoves = movesFromSelection(legalMoves, from);
+    const destinationMoves = sourceMoves.filter((move) => {
+      if (move.kind === "castle") {
+        return sameSquare(move.kingTo, to) || sameSquare(move.rookTo, to);
+      }
+      const destination = moveToSquare(move);
+      return destination ? sameSquare(destination, to) : false;
+    });
+
+    if (destinationMoves.length === 0) {
+      return false;
+    }
+
+    const promotionMoves = destinationMoves.filter((move) => move.kind === "promotion");
+    if (promotionMoves.length > 0) {
+      setSelected(from);
+      setPendingPromotion(promotionMoves);
+    } else {
+      playMove(destinationMoves[0]);
+    }
+    return true;
+  };
+
+  const onPointerDown = (event: PointerEvent<HTMLButtonElement>, square: Square) => {
+    if (mode !== "normal" || result.status !== "active" || event.button !== 0) {
+      return;
+    }
+    const piece = state.board[square.y][square.x];
+    if (piece?.color !== state.turn) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setSelected(square);
+    setDrag({
+      from: square,
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false
+    });
+  };
+
+  const onPointerMove = (event: PointerEvent<HTMLButtonElement>) => {
+    setDrag((current) => {
+      if (!current || current.pointerId !== event.pointerId) {
+        return current;
+      }
+      const distance = Math.hypot(event.clientX - current.startX, event.clientY - current.startY);
+      return {
+        ...current,
+        x: event.clientX,
+        y: event.clientY,
+        active: current.active || distance > 5
+      };
+    });
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const drop = squareFromClientPoint(event.clientX, event.clientY);
+    const wasActive = drag.active || Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) > 5;
+    setDrag(null);
+    if (wasActive) {
+      setSuppressClick(true);
+      if (drop) {
+        playMoveToSquare(drag.from, drop);
+      }
+    }
+  };
+
   const undo = () => {
     const previous = history[history.length - 1];
     if (!previous) {
@@ -105,6 +222,8 @@ export function App() {
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
+    setLastMoveSquares([]);
+    setBishopAnimation(null);
   };
 
   const restart = () => {
@@ -113,6 +232,8 @@ export function App() {
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
+    setLastMoveSquares([]);
+    setBishopAnimation(null);
   };
 
   const chooseDebugMove = (value: string) => {
@@ -145,14 +266,16 @@ export function App() {
           <div className="files topFiles">{["a", "b", "c", "d", "e", "f", "g", "h"].map((file) => <span key={file}>{file}</span>)}</div>
           <div className="boardRow">
             <div className="ranks">{[8, 7, 6, 5, 4, 3, 2, 1].map((rank) => <span key={rank}>{rank}</span>)}</div>
-            <div className="board" aria-label="Meme Chess board">
+            <div className="board" ref={boardRef} aria-label="Meme Chess board">
               {state.board.flatMap((row, y) =>
                 row.map((piece, x) => {
                   const square = { x, y };
                   const name = squareName(square);
                   const isLight = (x + y) % 2 === 0;
                   const isSelected = selected ? sameSquare(selected, square) : false;
-                  const highlight = highlightedSquares.some((candidate) => sameSquare(candidate, square));
+                  const marker = markerForSquare(square, highlightedSquares, mode, selectedMoves, Boolean(piece));
+                  const isLastMove = lastMoveSquares.some((candidate) => sameSquare(candidate, square));
+                  const isDraggedPiece = Boolean(drag?.active && sameSquare(drag.from, square));
                   return (
                     <button
                       key={name}
@@ -161,8 +284,14 @@ export function App() {
                         "square",
                         isLight ? "light" : "dark",
                         isSelected ? "selected" : "",
-                        highlight ? "highlight" : ""
+                        isLastMove ? "lastMove" : "",
+                        marker ? `marker-${marker}` : "",
+                        isDraggedPiece ? "dragSource" : ""
                       ].join(" ")}
+                      onPointerDown={(event) => onPointerDown(event, square)}
+                      onPointerMove={onPointerMove}
+                      onPointerUp={onPointerUp}
+                      onPointerCancel={() => setDrag(null)}
                       onClick={() => onSquareClick(square)}
                       aria-label={`${name}${piece ? ` ${piece.color} ${piece.type}` : ""}`}
                     >
@@ -170,6 +299,21 @@ export function App() {
                     </button>
                   );
                 })
+              )}
+              {bishopAnimation && (
+                <span
+                  key={bishopAnimation.id}
+                  className="infiniteBishopFlight"
+                  style={bishopFlightStyle(bishopAnimation)}
+                  aria-hidden="true"
+                >
+                  {pieceSymbol({
+                    id: "animation",
+                    color: bishopAnimation.color,
+                    type: "bishop",
+                    hasMoved: false
+                  })}
+                </span>
               )}
             </div>
             <div className="ranks rightRanks">{[8, 7, 6, 5, 4, 3, 2, 1].map((rank) => <span key={rank}>{rank}</span>)}</div>
@@ -238,8 +382,25 @@ export function App() {
           </div>
         </div>
       )}
+
+      {drag?.active && (
+        <div className="dragPiece" style={{ left: drag.x, top: drag.y }} aria-hidden="true">
+          {pieceSymbol(state.board[drag.from.y][drag.from.x]!)}
+        </div>
+      )}
     </main>
   );
+
+  function squareFromClientPoint(clientX: number, clientY: number): Square | null {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (!rect || clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) {
+      return null;
+    }
+    return {
+      x: Math.min(7, Math.max(0, Math.floor(((clientX - rect.left) / rect.width) * 8))),
+      y: Math.min(7, Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * 8)))
+    };
+  }
 }
 
 function PieceCounts({ color, counts }: { color: Color; counts: Record<PieceType, number> }) {
@@ -288,6 +449,60 @@ function moveToSquare(move: Move): Square | null {
   if (move.kind === "move" || move.kind === "promotion" || move.kind === "enPassant") return move.to;
   if (move.kind === "castle") return move.kingTo;
   return null;
+}
+
+function moveSquares(move: Move): Square[] {
+  if (move.kind === "move" || move.kind === "promotion") return [move.from, move.to];
+  if (move.kind === "enPassant") return [move.from, move.to, move.captured];
+  if (move.kind === "castle") return [move.kingFrom, move.kingTo, move.rookFrom, move.rookTo];
+  if (move.kind === "infiniteBishop") return [move.to];
+  return [move.king, move.queen, move.spawn];
+}
+
+function markerForSquare(
+  square: Square,
+  highlightedSquares: Square[],
+  mode: Mode,
+  selectedMoves: Move[],
+  occupied: boolean
+): "move" | "capture" | "special" | null {
+  if (!highlightedSquares.some((candidate) => sameSquare(candidate, square))) {
+    return null;
+  }
+  if (mode === "infinite" || mode === "royal") {
+    return "special";
+  }
+  const move = selectedMoves.find((candidate) => {
+    const destination = moveToSquare(candidate);
+    return destination ? sameSquare(destination, square) : false;
+  });
+  if (!move) {
+    return "move";
+  }
+  if (move.kind === "enPassant") {
+    return "capture";
+  }
+  if (move.kind === "move" || move.kind === "promotion") {
+    return occupied ? "capture" : "move";
+  }
+  return "move";
+}
+
+function bishopFlightStyle(animation: BishopAnimation): CSSProperties {
+  const targetX = (animation.to.x + 0.5) * 12.5;
+  const targetY = (animation.to.y + 0.5) * 12.5;
+  const deltaX = animation.from.x - animation.to.x;
+  const deltaY = animation.from.y - animation.to.y;
+  const scale = Math.max(Math.abs(deltaX), Math.abs(deltaY), 1);
+  const startX = targetX + (deltaX / scale) * 28;
+  const startY = targetY + (deltaY / scale) * 28;
+
+  return {
+    "--flight-start-x": `${startX}%`,
+    "--flight-start-y": `${startY}%`,
+    "--flight-end-x": `${targetX}%`,
+    "--flight-end-y": `${targetY}%`
+  } as CSSProperties;
 }
 
 function uniqueSquares(squares: Square[]): Square[] {
