@@ -7,7 +7,6 @@ import {
   generateEnPassantMoves,
   getLegalMoves,
   parseSquare,
-  pieceSymbol,
   PROMOTION_TYPES,
   serializePosition,
   squareName,
@@ -18,7 +17,8 @@ import {
   type Square
 } from "../engine/memeChess";
 
-type Mode = "normal" | "infinite" | "royal";
+type Mode = "normal" | "infinite" | "mark";
+type AnnotationColor = "yellow" | "red" | "blue" | "green";
 
 interface DragState {
   from: Square;
@@ -46,6 +46,16 @@ const PIECE_LABELS: Record<PieceType, string> = {
   pawn: "Pawn"
 };
 
+const ANNOTATION_COLORS: AnnotationColor[] = ["yellow", "red", "blue", "green"];
+const FILLED_SYMBOLS: Record<PieceType, string> = {
+  king: "♚",
+  queen: "♛",
+  rook: "♜",
+  bishop: "♝",
+  knight: "♞",
+  pawn: "♟"
+};
+
 export function App() {
   const boardRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<GameState>(() => createInitialState());
@@ -53,6 +63,8 @@ export function App() {
   const [selected, setSelected] = useState<Square | null>(null);
   const [mode, setMode] = useState<Mode>("normal");
   const [pendingPromotion, setPendingPromotion] = useState<Move[] | null>(null);
+  const [royalChoices, setRoyalChoices] = useState<Move[] | null>(null);
+  const [annotations, setAnnotations] = useState<Record<string, AnnotationColor>>({});
   const [lastMoveSquares, setLastMoveSquares] = useState<Square[]>([]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [suppressClick, setSuppressClick] = useState(false);
@@ -64,7 +76,8 @@ export function App() {
   const enPassantForced = generateEnPassantMoves(state).length > 0;
 
   const selectedMoves = selected ? movesFromSelection(legalMoves, selected) : [];
-  const highlightedSquares = highlightedForMode(mode, legalMoves, selectedMoves);
+  const royalQueenSquares = selected ? royalQueenTargets(legalMoves, selected) : [];
+  const highlightedSquares = highlightedForMode(mode, legalMoves, selectedMoves, royalChoices, royalQueenSquares);
 
   const playMove = (move: Move) => {
     if (result.status !== "active") {
@@ -85,6 +98,7 @@ export function App() {
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
+    setRoyalChoices(null);
     if (animation) {
       setBishopAnimation(animation);
       window.setTimeout(() => {
@@ -96,6 +110,10 @@ export function App() {
   const onSquareClick = (square: Square) => {
     if (suppressClick) {
       setSuppressClick(false);
+      return;
+    }
+    if (mode === "mark") {
+      cycleAnnotation(square);
       return;
     }
     if (result.status !== "active") {
@@ -110,12 +128,13 @@ export function App() {
       return;
     }
 
-    if (mode === "royal") {
-      const move = legalMoves.find(
+    if (royalChoices) {
+      const move = royalChoices.find(
         (candidate) => candidate.kind === "royalReproduction" && sameSquare(candidate.spawn, square)
       );
       if (move) playMove(move);
-      return;
+      else setRoyalChoices(null);
+      if (move) return;
     }
 
     const destinationMoves = selectedMoves.filter((move) => moveToSquare(move) && sameSquare(moveToSquare(move)!, square));
@@ -129,15 +148,32 @@ export function App() {
       return;
     }
 
+    if (selected) {
+      const royalMoves = royalMovesForQueenDrop(legalMoves, selected, square);
+      if (royalMoves.length > 0) {
+        setRoyalChoices(royalMoves);
+        return;
+      }
+    }
+
     const piece = state.board[square.y][square.x];
     if (piece?.color === state.turn) {
       setSelected(square);
+      setRoyalChoices(null);
     } else {
       setSelected(null);
+      setRoyalChoices(null);
     }
   };
 
   const playMoveToSquare = (from: Square, to: Square) => {
+    const royalMoves = royalMovesForQueenDrop(legalMoves, from, to);
+    if (royalMoves.length > 0) {
+      setSelected(from);
+      setRoyalChoices(royalMoves);
+      return true;
+    }
+
     const sourceMoves = movesFromSelection(legalMoves, from);
     const destinationMoves = sourceMoves.filter((move) => {
       if (move.kind === "castle") {
@@ -162,6 +198,9 @@ export function App() {
   };
 
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>, square: Square) => {
+    if (mode === "mark") {
+      return;
+    }
     if (mode !== "normal" || result.status !== "active" || event.button !== 0) {
       return;
     }
@@ -222,6 +261,7 @@ export function App() {
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
+    setRoyalChoices(null);
     setLastMoveSquares([]);
     setBishopAnimation(null);
   };
@@ -232,6 +272,8 @@ export function App() {
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
+    setRoyalChoices(null);
+    setAnnotations({});
     setLastMoveSquares([]);
     setBishopAnimation(null);
   };
@@ -241,7 +283,23 @@ export function App() {
     if (square) {
       setSelected(square);
       setMode("normal");
+      setRoyalChoices(null);
     }
+  };
+
+  const cycleAnnotation = (square: Square) => {
+    const key = squareKey(square);
+    setAnnotations((current) => {
+      const existing = current[key];
+      const nextIndex = existing ? ANNOTATION_COLORS.indexOf(existing) + 1 : 0;
+      const copy = { ...current };
+      if (nextIndex >= ANNOTATION_COLORS.length) {
+        delete copy[key];
+      } else {
+        copy[key] = ANNOTATION_COLORS[nextIndex];
+      }
+      return copy;
+    });
   };
 
   return (
@@ -258,6 +316,17 @@ export function App() {
           <button type="button" onClick={restart}>
             Restart
           </button>
+          <button
+            type="button"
+            className={mode === "mark" ? "active" : ""}
+            onClick={() => {
+              setMode(mode === "mark" ? "normal" : "mark");
+              setSelected(null);
+              setRoyalChoices(null);
+            }}
+          >
+            Mark
+          </button>
         </div>
       </section>
 
@@ -273,9 +342,18 @@ export function App() {
                   const name = squareName(square);
                   const isLight = (x + y) % 2 === 0;
                   const isSelected = selected ? sameSquare(selected, square) : false;
-                  const marker = markerForSquare(square, highlightedSquares, mode, selectedMoves, Boolean(piece));
+                  const marker = markerForSquare(
+                    square,
+                    highlightedSquares,
+                    mode,
+                    selectedMoves,
+                    Boolean(piece),
+                    royalChoices,
+                    royalQueenSquares
+                  );
                   const isLastMove = lastMoveSquares.some((candidate) => sameSquare(candidate, square));
                   const isDraggedPiece = Boolean(drag?.active && sameSquare(drag.from, square));
+                  const annotation = annotations[squareKey(square)];
                   return (
                     <button
                       key={name}
@@ -286,6 +364,7 @@ export function App() {
                         isSelected ? "selected" : "",
                         isLastMove ? "lastMove" : "",
                         marker ? `marker-${marker}` : "",
+                        annotation ? `annotation-${annotation}` : "",
                         isDraggedPiece ? "dragSource" : ""
                       ].join(" ")}
                       onPointerDown={(event) => onPointerDown(event, square)}
@@ -295,7 +374,9 @@ export function App() {
                       onClick={() => onSquareClick(square)}
                       aria-label={`${name}${piece ? ` ${piece.color} ${piece.type}` : ""}`}
                     >
-                      <span className="piece">{piece ? pieceSymbol(piece) : ""}</span>
+                      <span className={piece ? `piece ${piece.color}` : "piece"}>
+                        {piece ? filledPieceSymbol(piece.type) : ""}
+                      </span>
                     </button>
                   );
                 })
@@ -303,16 +384,11 @@ export function App() {
               {bishopAnimation && (
                 <span
                   key={bishopAnimation.id}
-                  className="infiniteBishopFlight"
+                  className={`infiniteBishopFlight ${bishopAnimation.color}`}
                   style={bishopFlightStyle(bishopAnimation)}
                   aria-hidden="true"
                 >
-                  {pieceSymbol({
-                    id: "animation",
-                    color: bishopAnimation.color,
-                    type: "bishop",
-                    hasMoved: false
-                  })}
+                  {filledPieceSymbol("bishop")}
                 </span>
               )}
             </div>
@@ -338,13 +414,8 @@ export function App() {
             >
               Infinite Bishop
             </button>
-            <button
-              type="button"
-              className={mode === "royal" ? "active" : ""}
-              onClick={() => setMode(mode === "royal" ? "normal" : "royal")}
-              disabled={result.status !== "active" || !legalMoves.some((move) => move.kind === "royalReproduction")}
-            >
-              Royal Reproduction
+            <button type="button" onClick={() => setAnnotations({})} disabled={Object.keys(annotations).length === 0}>
+              Clear Marks
             </button>
           </div>
 
@@ -384,8 +455,8 @@ export function App() {
       )}
 
       {drag?.active && (
-        <div className="dragPiece" style={{ left: drag.x, top: drag.y }} aria-hidden="true">
-          {pieceSymbol(state.board[drag.from.y][drag.from.x]!)}
+        <div className={`dragPiece ${state.board[drag.from.y][drag.from.x]!.color}`} style={{ left: drag.x, top: drag.y }} aria-hidden="true">
+          {filledPieceSymbol(state.board[drag.from.y][drag.from.x]!.type)}
         </div>
       )}
     </main>
@@ -435,14 +506,30 @@ function movesFromSelection(moves: Move[], selected: Square): Move[] {
   });
 }
 
-function highlightedForMode(mode: Mode, moves: Move[], selectedMoves: Move[]): Square[] {
+function highlightedForMode(
+  mode: Mode,
+  moves: Move[],
+  selectedMoves: Move[],
+  royalChoices: Move[] | null,
+  royalQueenSquares: Square[]
+): Square[] {
+  if (royalChoices) {
+    return uniqueSquares(
+      royalChoices
+        .filter((move) => move.kind === "royalReproduction")
+        .map((move) => move.spawn)
+    );
+  }
   if (mode === "infinite") {
     return uniqueSquares(moves.filter((move) => move.kind === "infiniteBishop").map((move) => move.to));
   }
-  if (mode === "royal") {
-    return uniqueSquares(moves.filter((move) => move.kind === "royalReproduction").map((move) => move.spawn));
+  if (mode === "mark") {
+    return [];
   }
-  return uniqueSquares(selectedMoves.map(moveToSquare).filter((square): square is Square => Boolean(square)));
+  return uniqueSquares([
+    ...selectedMoves.map(moveToSquare).filter((square): square is Square => Boolean(square)),
+    ...royalQueenSquares
+  ]);
 }
 
 function moveToSquare(move: Move): Square | null {
@@ -464,12 +551,18 @@ function markerForSquare(
   highlightedSquares: Square[],
   mode: Mode,
   selectedMoves: Move[],
-  occupied: boolean
+  occupied: boolean,
+  royalChoices: Move[] | null,
+  royalQueenSquares: Square[]
 ): "move" | "capture" | "special" | null {
   if (!highlightedSquares.some((candidate) => sameSquare(candidate, square))) {
     return null;
   }
-  if (mode === "infinite" || mode === "royal") {
+  if (
+    mode === "infinite" ||
+    royalQueenSquares.some((candidate) => sameSquare(candidate, square)) ||
+    royalChoices?.some((move) => move.kind === "royalReproduction" && sameSquare(move.spawn, square))
+  ) {
     return "special";
   }
   const move = selectedMoves.find((candidate) => {
@@ -486,6 +579,31 @@ function markerForSquare(
     return occupied ? "capture" : "move";
   }
   return "move";
+}
+
+function royalQueenTargets(moves: Move[], king: Square): Square[] {
+  return uniqueSquares(
+    moves
+      .filter((move) => move.kind === "royalReproduction" && sameSquare(move.king, king))
+      .map((move) => (move.kind === "royalReproduction" ? move.queen : { x: -1, y: -1 }))
+  );
+}
+
+function royalMovesForQueenDrop(moves: Move[], king: Square, queen: Square): Move[] {
+  return moves.filter(
+    (move) =>
+      move.kind === "royalReproduction" &&
+      sameSquare(move.king, king) &&
+      sameSquare(move.queen, queen)
+  );
+}
+
+function filledPieceSymbol(type: PieceType): string {
+  return FILLED_SYMBOLS[type];
+}
+
+function squareKey(square: Square): string {
+  return `${square.x},${square.y}`;
 }
 
 function bishopFlightStyle(animation: BishopAnimation): CSSProperties {

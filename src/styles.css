@@ -99,6 +99,12 @@ h1 {
   flex-wrap: wrap;
 }
 
+.actions button.active,
+.specials button.active {
+  background: var(--material-blue);
+  color: #ffffff;
+}
+
 .game {
   display: grid;
   grid-template-columns: minmax(280px, 680px) minmax(260px, 1fr);
@@ -180,6 +186,22 @@ h1 {
   background: var(--board-last);
 }
 
+.square.annotation-yellow {
+  background-image: linear-gradient(rgba(255, 235, 59, 0.42), rgba(255, 235, 59, 0.42));
+}
+
+.square.annotation-red {
+  background-image: linear-gradient(rgba(244, 67, 54, 0.34), rgba(244, 67, 54, 0.34));
+}
+
+.square.annotation-blue {
+  background-image: linear-gradient(rgba(33, 150, 243, 0.34), rgba(33, 150, 243, 0.34));
+}
+
+.square.annotation-green {
+  background-image: linear-gradient(rgba(76, 175, 80, 0.34), rgba(76, 175, 80, 0.34));
+}
+
 .square.marker-move::after,
 .square.marker-special::after {
   content: "";
@@ -215,11 +237,28 @@ h1 {
   z-index: 3;
   font-size: clamp(1.5rem, 7vw, 4.25rem);
   line-height: 1;
-  color: #151515;
-  text-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.6),
-    0 2px 8px rgba(0, 0, 0, 0.22);
   pointer-events: none;
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols2", serif;
+}
+
+.piece.white,
+.dragPiece.white,
+.infiniteBishopFlight.white {
+  color: #f8f8f8;
+  -webkit-text-stroke: 1.4px rgba(36, 36, 36, 0.72);
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.45),
+    0 2px 4px rgba(0, 0, 0, 0.24);
+}
+
+.piece.black,
+.dragPiece.black,
+.infiniteBishopFlight.black {
+  color: #242424;
+  -webkit-text-stroke: 0.8px rgba(255, 255, 255, 0.34);
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.28),
+    0 2px 6px rgba(0, 0, 0, 0.28);
 }
 
 .files,
@@ -289,11 +328,6 @@ h1 {
   padding: 10px 12px;
   color: #7f1d1d;
   border-radius: 4px;
-}
-
-.specials button.active {
-  background: var(--material-blue);
-  color: #ffffff;
 }
 
 .counts {
@@ -397,10 +431,7 @@ h1 {
   pointer-events: none;
   font-size: clamp(2.4rem, 7vw, 4.8rem);
   line-height: 1;
-  color: #151515;
-  text-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.75),
-    0 10px 22px rgba(0, 0, 0, 0.35);
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols2", serif;
 }
 
 .infiniteBishopFlight {
@@ -412,7 +443,7 @@ h1 {
   pointer-events: none;
   font-size: clamp(1.5rem, 7vw, 4.25rem);
   line-height: 1;
-  color: #151515;
+  font-family: "Segoe UI Symbol", "Apple Symbols", "Noto Sans Symbols2", serif;
   filter: drop-shadow(0 0 10px rgba(25, 118, 210, 0.8));
   animation: infiniteBishopFlight 720ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
