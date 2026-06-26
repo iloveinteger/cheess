@@ -232,6 +232,37 @@ h1 {
   opacity: 0;
 }
 
+.arrowLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.boardArrow {
+  stroke: rgba(255, 193, 7, 0.72);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  marker-end: url("#arrowHead");
+}
+
+.arrowLayer marker path {
+  fill: rgba(255, 193, 7, 0.72);
+}
+
+.boardArrow.arrow-red {
+  stroke: rgba(244, 67, 54, 0.72);
+}
+
+.boardArrow.arrow-blue {
+  stroke: rgba(33, 150, 243, 0.72);
+}
+
+.boardArrow.arrow-green {
+  stroke: rgba(76, 175, 80, 0.72);
+}
+
 .piece {
   position: relative;
   z-index: 3;
@@ -328,6 +359,49 @@ h1 {
   padding: 10px 12px;
   color: #7f1d1d;
   border-radius: 4px;
+}
+
+.onlinePanel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+  box-shadow: inset 0 0 0 1px rgba(96, 125, 139, 0.14);
+}
+
+.onlineStatus {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+}
+
+.onlineStatus strong {
+  color: #263238;
+}
+
+.onlineActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.onlinePanel label {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.onlinePanel textarea {
+  min-height: 78px;
+  resize: vertical;
+  border: 1px solid #cfd8dc;
+  border-radius: 6px;
+  padding: 8px;
+  font: 0.78rem ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: #263238;
 }
 
 .counts {

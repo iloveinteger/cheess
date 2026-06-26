@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import {
   applyMove,
   countPieces,
@@ -17,17 +17,27 @@ import {
   type Square
 } from "../engine/memeChess";
 
-type Mode = "normal" | "infinite" | "mark";
+type Mode = "normal" | "infinite";
+type GameMode = "local" | "bot" | "online";
 type AnnotationColor = "yellow" | "red" | "blue" | "green";
 
 interface DragState {
+  purpose: "move" | "arrow";
   from: Square;
   pointerId: number;
   x: number;
   y: number;
   startX: number;
   startY: number;
+  to: Square | null;
   active: boolean;
+}
+
+interface ArrowAnnotation {
+  id: number;
+  from: Square;
+  to: Square;
+  color: AnnotationColor;
 }
 
 interface BishopAnimation {
@@ -36,6 +46,10 @@ interface BishopAnimation {
   to: Square;
   color: Color;
 }
+
+type OnlineMessage =
+  | { type: "state"; state: GameState }
+  | { type: "move"; move: Move };
 
 const PIECE_LABELS: Record<PieceType, string> = {
   king: "King",
@@ -58,13 +72,22 @@ const FILLED_SYMBOLS: Record<PieceType, string> = {
 
 export function App() {
   const boardRef = useRef<HTMLDivElement | null>(null);
+  const stateRef = useRef<GameState>(createInitialState());
+  const peerRef = useRef<RTCPeerConnection | null>(null);
+  const channelRef = useRef<RTCDataChannel | null>(null);
   const [state, setState] = useState<GameState>(() => createInitialState());
+  const [gameMode, setGameMode] = useState<GameMode>("local");
+  const [onlineColor, setOnlineColor] = useState<Color>("white");
+  const [onlineStatus, setOnlineStatus] = useState("Offline");
+  const [localSignal, setLocalSignal] = useState("");
+  const [remoteSignal, setRemoteSignal] = useState("");
   const [history, setHistory] = useState<GameState[]>([]);
   const [selected, setSelected] = useState<Square | null>(null);
   const [mode, setMode] = useState<Mode>("normal");
   const [pendingPromotion, setPendingPromotion] = useState<Move[] | null>(null);
   const [royalChoices, setRoyalChoices] = useState<Move[] | null>(null);
   const [annotations, setAnnotations] = useState<Record<string, AnnotationColor>>({});
+  const [arrows, setArrows] = useState<ArrowAnnotation[]>([]);
   const [lastMoveSquares, setLastMoveSquares] = useState<Square[]>([]);
   const [drag, setDrag] = useState<DragState | null>(null);
   const [suppressClick, setSuppressClick] = useState(false);
@@ -78,27 +101,57 @@ export function App() {
   const selectedMoves = selected ? movesFromSelection(legalMoves, selected) : [];
   const royalQueenSquares = selected ? royalQueenTargets(legalMoves, selected) : [];
   const highlightedSquares = highlightedForMode(mode, legalMoves, selectedMoves, royalChoices, royalQueenSquares);
+  const canMoveCurrentTurn =
+    result.status === "active" &&
+    (gameMode !== "bot" || state.turn === "white") &&
+    (gameMode !== "online" || state.turn === onlineColor);
 
-  const playMove = (move: Move) => {
-    if (result.status !== "active") {
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
+    if (gameMode !== "bot" || state.turn !== "black" || result.status !== "active" || pendingPromotion || royalChoices) {
       return;
     }
+    const timer = window.setTimeout(() => {
+      const move = chooseBotMove(state);
+      if (move) {
+        playMove(move);
+      }
+    }, 360);
+    return () => window.clearTimeout(timer);
+  }, [gameMode, pendingPromotion, result.status, royalChoices, state]);
+
+  const playMove = (move: Move, broadcast = true) => {
+    if (detectGameResult(stateRef.current).status !== "active") {
+      return;
+    }
+    commitMove(stateRef.current, move, broadcast);
+  };
+
+  const commitMove = (baseState: GameState, move: Move, broadcast: boolean) => {
     const animation =
       move.kind === "infiniteBishop"
         ? {
             id: Date.now(),
             from: move.spawn,
             to: move.to,
-            color: state.turn
+            color: baseState.turn
           }
         : null;
-    setHistory((current) => [...current, state]);
-    setState(applyMove(state, move));
+    const nextState = applyMove(baseState, move);
+    stateRef.current = nextState;
+    setHistory((current) => [...current, baseState]);
+    setState(nextState);
     setLastMoveSquares(moveSquares(move));
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
     setRoyalChoices(null);
+    if (broadcast) {
+      sendOnlineMessage({ type: "move", move });
+    }
     if (animation) {
       setBishopAnimation(animation);
       window.setTimeout(() => {
@@ -112,13 +165,20 @@ export function App() {
       setSuppressClick(false);
       return;
     }
-    if (mode === "mark") {
+    if (royalChoices) {
+      const move = royalChoices.find(
+        (candidate) => candidate.kind === "royalReproduction" && sameSquare(candidate.spawn, square)
+      );
+      if (move) {
+        playMove(move);
+        return;
+      }
+    }
+    if (mode === "normal" && shouldAnnotateClick(square)) {
       cycleAnnotation(square);
       return;
     }
-    if (result.status !== "active") {
-      return;
-    }
+    if (!canMoveCurrentTurn) return;
 
     if (mode === "infinite") {
       const move = legalMoves.find(
@@ -128,14 +188,7 @@ export function App() {
       return;
     }
 
-    if (royalChoices) {
-      const move = royalChoices.find(
-        (candidate) => candidate.kind === "royalReproduction" && sameSquare(candidate.spawn, square)
-      );
-      if (move) playMove(move);
-      else setRoyalChoices(null);
-      if (move) return;
-    }
+    if (royalChoices) setRoyalChoices(null);
 
     const destinationMoves = selectedMoves.filter((move) => moveToSquare(move) && sameSquare(moveToSquare(move)!, square));
     if (destinationMoves.length > 0) {
@@ -157,6 +210,9 @@ export function App() {
     }
 
     const piece = state.board[square.y][square.x];
+    if (royalChoices?.some((move) => move.kind === "royalReproduction" && sameSquare(move.spawn, square))) {
+      return false;
+    }
     if (piece?.color === state.turn) {
       setSelected(square);
       setRoyalChoices(null);
@@ -167,6 +223,9 @@ export function App() {
   };
 
   const playMoveToSquare = (from: Square, to: Square) => {
+    if (!canMoveCurrentTurn) {
+      return false;
+    }
     const royalMoves = royalMovesForQueenDrop(legalMoves, from, to);
     if (royalMoves.length > 0) {
       setSelected(from);
@@ -198,25 +257,24 @@ export function App() {
   };
 
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>, square: Square) => {
-    if (mode === "mark") {
-      return;
-    }
-    if (mode !== "normal" || result.status !== "active" || event.button !== 0) {
+    if (mode !== "normal" || event.button !== 0) {
       return;
     }
     const piece = state.board[square.y][square.x];
-    if (piece?.color !== state.turn) {
-      return;
-    }
     event.currentTarget.setPointerCapture(event.pointerId);
-    setSelected(square);
+    const isPlayablePiece = Boolean(piece?.color === state.turn && canMoveCurrentTurn);
+    if (isPlayablePiece) {
+      setSelected(square);
+    }
     setDrag({
+      purpose: isPlayablePiece ? "move" : "arrow",
       from: square,
       pointerId: event.pointerId,
       x: event.clientX,
       y: event.clientY,
       startX: event.clientX,
       startY: event.clientY,
+      to: square,
       active: false
     });
   };
@@ -231,6 +289,7 @@ export function App() {
         ...current,
         x: event.clientX,
         y: event.clientY,
+        to: squareFromClientPoint(event.clientX, event.clientY),
         active: current.active || distance > 5
       };
     });
@@ -245,8 +304,10 @@ export function App() {
     setDrag(null);
     if (wasActive) {
       setSuppressClick(true);
-      if (drop) {
+      if (drop && drag.purpose === "move") {
         playMoveToSquare(drag.from, drop);
+      } else if (drop && drag.purpose === "arrow" && !sameSquare(drag.from, drop)) {
+        toggleArrow(drag.from, drop);
       }
     }
   };
@@ -267,15 +328,21 @@ export function App() {
   };
 
   const restart = () => {
-    setState(createInitialState());
+    const freshState = createInitialState();
+    stateRef.current = freshState;
+    setState(freshState);
     setHistory([]);
     setSelected(null);
     setMode("normal");
     setPendingPromotion(null);
     setRoyalChoices(null);
     setAnnotations({});
+    setArrows([]);
     setLastMoveSquares([]);
     setBishopAnimation(null);
+    if (gameMode === "online") {
+      window.setTimeout(() => sendOnlineMessage({ type: "state", state: freshState }), 0);
+    }
   };
 
   const chooseDebugMove = (value: string) => {
@@ -302,6 +369,125 @@ export function App() {
     });
   };
 
+  const toggleArrow = (from: Square, to: Square) => {
+    setArrows((current) => {
+      const existing = current.find((arrow) => sameSquare(arrow.from, from) && sameSquare(arrow.to, to));
+      if (existing) {
+        return current.filter((arrow) => arrow.id !== existing.id);
+      }
+      return [...current, { id: Date.now(), from, to, color: "yellow" }];
+    });
+  };
+
+  const switchGameMode = (nextMode: GameMode) => {
+    if (nextMode !== "online") {
+      closeOnlineConnection();
+    }
+    setGameMode(nextMode);
+    setOnlineStatus(nextMode === "online" ? onlineStatus : "Offline");
+    restart();
+  };
+
+  const closeOnlineConnection = () => {
+    channelRef.current?.close();
+    peerRef.current?.close();
+    channelRef.current = null;
+    peerRef.current = null;
+    setLocalSignal("");
+    setRemoteSignal("");
+    setOnlineStatus("Offline");
+  };
+
+  const createOnlineGame = async () => {
+    closeOnlineConnection();
+    setGameMode("online");
+    setOnlineColor("white");
+    setOnlineStatus("Creating offer");
+    const peer = createPeer();
+    peerRef.current = peer;
+    const channel = peer.createDataChannel("meme-chess");
+    setupDataChannel(channel, "white");
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    await waitForIceGathering(peer);
+    setLocalSignal(encodeSignal(peer.localDescription));
+    setOnlineStatus("Send local signal to black");
+  };
+
+  const joinOnlineGame = async () => {
+    closeOnlineConnection();
+    setGameMode("online");
+    setOnlineColor("black");
+    setOnlineStatus("Joining");
+    const peer = createPeer();
+    peerRef.current = peer;
+    peer.ondatachannel = (event) => setupDataChannel(event.channel, "black");
+    await peer.setRemoteDescription(decodeSignal(remoteSignal));
+    const answer = await peer.createAnswer();
+    await peer.setLocalDescription(answer);
+    await waitForIceGathering(peer);
+    setLocalSignal(encodeSignal(peer.localDescription));
+    setOnlineStatus("Send local signal to white");
+  };
+
+  const acceptOnlineAnswer = async () => {
+    if (!peerRef.current) return;
+    await peerRef.current.setRemoteDescription(decodeSignal(remoteSignal));
+    setOnlineStatus("Connecting");
+  };
+
+  const createPeer = () => {
+    const peer = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    });
+    peer.onconnectionstatechange = () => {
+      setOnlineStatus(peer.connectionState === "connected" ? "Connected" : capitalize(peer.connectionState));
+    };
+    return peer;
+  };
+
+  const setupDataChannel = (channel: RTCDataChannel, color: Color) => {
+    channelRef.current = channel;
+    channel.onopen = () => {
+      setOnlineStatus("Connected");
+      if (color === "white") {
+        sendOnlineMessage({ type: "state", state: stateRef.current });
+      }
+    };
+    channel.onmessage = (event) => {
+      const message = JSON.parse(event.data) as OnlineMessage;
+      if (message.type === "state") {
+        stateRef.current = message.state;
+        setState(message.state);
+        setHistory([]);
+        setSelected(null);
+        setRoyalChoices(null);
+      }
+      if (message.type === "move") {
+        commitMove(stateRef.current, message.move, false);
+      }
+    };
+  };
+
+  const sendOnlineMessage = (message: OnlineMessage) => {
+    const channel = channelRef.current;
+    if (channel?.readyState === "open") {
+      channel.send(JSON.stringify(message));
+    }
+  };
+
+  const shouldAnnotateClick = (square: Square) => {
+    const piece = state.board[square.y][square.x];
+    if (!selected) {
+      return piece?.color !== state.turn;
+    }
+    const destinationMoves = selectedMoves.filter((move) => {
+      const destination = moveToSquare(move);
+      return destination ? sameSquare(destination, square) : false;
+    });
+    return destinationMoves.length === 0 && royalMovesForQueenDrop(legalMoves, selected, square).length === 0;
+  };
+
   return (
     <main className="app">
       <section className="topbar">
@@ -310,22 +496,20 @@ export function App() {
           <p>{statusText(result, state.turn)}</p>
         </div>
         <div className="actions">
+          <button type="button" className={gameMode === "local" ? "active" : ""} onClick={() => switchGameMode("local")}>
+            Local
+          </button>
+          <button type="button" className={gameMode === "bot" ? "active" : ""} onClick={() => switchGameMode("bot")}>
+            Vs Bot
+          </button>
+          <button type="button" className={gameMode === "online" ? "active" : ""} onClick={() => switchGameMode("online")}>
+            Online
+          </button>
           <button type="button" onClick={undo} disabled={history.length === 0}>
             Undo
           </button>
           <button type="button" onClick={restart}>
             Restart
-          </button>
-          <button
-            type="button"
-            className={mode === "mark" ? "active" : ""}
-            onClick={() => {
-              setMode(mode === "mark" ? "normal" : "mark");
-              setSelected(null);
-              setRoyalChoices(null);
-            }}
-          >
-            Mark
           </button>
         </div>
       </section>
@@ -381,6 +565,27 @@ export function App() {
                   );
                 })
               )}
+              <svg className="arrowLayer" viewBox="0 0 100 100" aria-hidden="true">
+                <defs>
+                  <marker id="arrowHead" markerWidth="4.5" markerHeight="4.5" refX="3.4" refY="2.25" orient="auto">
+                    <path d="M0,0 L4.5,2.25 L0,4.5 Z" />
+                  </marker>
+                </defs>
+                {[...arrows, ...previewArrows(drag)].map((arrow) => {
+                  const line = arrowLine(arrow.from, arrow.to);
+                  return (
+                    <line
+                      key={arrow.id}
+                      className={`boardArrow arrow-${arrow.color}`}
+                      x1={line.x1}
+                      y1={line.y1}
+                      x2={line.x2}
+                      y2={line.y2}
+                      markerEnd="url(#arrowHead)"
+                    />
+                  );
+                })}
+              </svg>
               {bishopAnimation && (
                 <span
                   key={bishopAnimation.id}
@@ -417,7 +622,38 @@ export function App() {
             <button type="button" onClick={() => setAnnotations({})} disabled={Object.keys(annotations).length === 0}>
               Clear Marks
             </button>
+            <button type="button" onClick={() => setArrows([])} disabled={arrows.length === 0}>
+              Clear Arrows
+            </button>
           </div>
+
+          {gameMode === "online" && (
+            <div className="onlinePanel">
+              <div className="onlineStatus">
+                <strong>{onlineStatus}</strong>
+                <span>You play {onlineColor}.</span>
+              </div>
+              <div className="onlineActions">
+                <button type="button" onClick={createOnlineGame}>
+                  Create
+                </button>
+                <button type="button" onClick={joinOnlineGame} disabled={!remoteSignal.trim()}>
+                  Join
+                </button>
+                <button type="button" onClick={acceptOnlineAnswer} disabled={!remoteSignal.trim()}>
+                  Accept Answer
+                </button>
+              </div>
+              <label>
+                Local signal
+                <textarea readOnly value={localSignal} />
+              </label>
+              <label>
+                Remote signal
+                <textarea value={remoteSignal} onChange={(event) => setRemoteSignal(event.target.value)} />
+              </label>
+            </div>
+          )}
 
           <div className="counts">
             <PieceCounts color="white" counts={counts.white} />
@@ -523,9 +759,6 @@ function highlightedForMode(
   if (mode === "infinite") {
     return uniqueSquares(moves.filter((move) => move.kind === "infiniteBishop").map((move) => move.to));
   }
-  if (mode === "mark") {
-    return [];
-  }
   return uniqueSquares([
     ...selectedMoves.map(moveToSquare).filter((square): square is Square => Boolean(square)),
     ...royalQueenSquares
@@ -604,6 +837,90 @@ function filledPieceSymbol(type: PieceType): string {
 
 function squareKey(square: Square): string {
   return `${square.x},${square.y}`;
+}
+
+function previewArrows(drag: DragState | null): ArrowAnnotation[] {
+  if (!drag || drag.purpose !== "arrow" || !drag.active || !drag.to || sameSquare(drag.from, drag.to)) {
+    return [];
+  }
+  return [{ id: -1, from: drag.from, to: drag.to, color: "yellow" }];
+}
+
+function arrowLine(from: Square, to: Square) {
+  const start = boardPoint(from);
+  const end = boardPoint(to);
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const shorten = 4.8;
+  return {
+    x1: start.x + (dx / length) * shorten,
+    y1: start.y + (dy / length) * shorten,
+    x2: end.x - (dx / length) * shorten,
+    y2: end.y - (dy / length) * shorten
+  };
+}
+
+function boardPoint(square: Square) {
+  return {
+    x: (square.x + 0.5) * 12.5,
+    y: (square.y + 0.5) * 12.5
+  };
+}
+
+function chooseBotMove(state: GameState): Move | null {
+  const moves = getLegalMoves(state);
+  if (moves.length === 0) {
+    return null;
+  }
+
+  return [...moves].sort((a, b) => scoreBotMove(state, b) - scoreBotMove(state, a))[0];
+}
+
+function scoreBotMove(state: GameState, move: Move): number {
+  let score = 0;
+  const result = detectGameResult(applyMove(state, move));
+  if (result.status === "win") score += 10000;
+  if (move.kind === "promotion") score += move.promoteTo === "queen" ? 900 : move.promoteTo === "king" ? 500 : 300;
+  if (move.kind === "enPassant") score += 220;
+  if (move.kind === "infiniteBishop") score += state.board[move.to.y][move.to.x] ? 360 : 30;
+  if (move.kind === "move" || move.kind === "promotion") {
+    const target = state.board[move.to.y][move.to.x];
+    if (target) score += pieceValue(target.type);
+  }
+  if (move.kind === "royalReproduction") score += 120;
+  return score;
+}
+
+function pieceValue(type: PieceType): number {
+  if (type === "queen") return 900;
+  if (type === "rook") return 500;
+  if (type === "bishop" || type === "knight") return 300;
+  if (type === "king") return 250;
+  return 100;
+}
+
+function encodeSignal(description: RTCSessionDescription | null): string {
+  return description ? btoa(JSON.stringify(description)) : "";
+}
+
+function decodeSignal(signal: string): RTCSessionDescriptionInit {
+  return JSON.parse(atob(signal.trim())) as RTCSessionDescriptionInit;
+}
+
+function waitForIceGathering(peer: RTCPeerConnection): Promise<void> {
+  if (peer.iceGatheringState === "complete") {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const timeout = window.setTimeout(resolve, 2500);
+    peer.addEventListener("icegatheringstatechange", () => {
+      if (peer.iceGatheringState === "complete") {
+        window.clearTimeout(timeout);
+        resolve();
+      }
+    });
+  });
 }
 
 function bishopFlightStyle(animation: BishopAnimation): CSSProperties {
