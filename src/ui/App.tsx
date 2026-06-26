@@ -19,6 +19,7 @@ import {
 
 type Mode = "normal" | "infinite";
 type GameMode = "local" | "bot" | "analysis";
+type BotDifficulty = "easy" | "normal" | "hard";
 type AnnotationColor = "yellow" | "red" | "blue" | "green";
 
 interface DragState {
@@ -71,6 +72,7 @@ export function App() {
   const stateRef = useRef<GameState>(createInitialState());
   const [state, setState] = useState<GameState>(() => createInitialState());
   const [gameMode, setGameMode] = useState<GameMode>("local");
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>("normal");
   const [history, setHistory] = useState<GameState[]>([]);
   const [future, setFuture] = useState<GameState[]>([]);
   const [selected, setSelected] = useState<Square | null>(null);
@@ -106,13 +108,13 @@ export function App() {
       return;
     }
     const timer = window.setTimeout(() => {
-      const move = chooseBotMove(state);
+      const move = chooseBotMove(state, botDifficulty);
       if (move) {
         playMove(move);
       }
     }, 360);
     return () => window.clearTimeout(timer);
-  }, [gameMode, pendingPromotion, result.status, royalChoices, state]);
+  }, [botDifficulty, gameMode, pendingPromotion, result.status, royalChoices, state]);
 
   const playMove = (move: Move) => {
     if (detectGameResult(stateRef.current).status !== "active") {
@@ -426,6 +428,16 @@ export function App() {
           <button type="button" className={gameMode === "analysis" ? "active" : ""} onClick={() => switchGameMode("analysis")}>
             Analysis
           </button>
+          {gameMode === "bot" && (
+            <label className="difficulty">
+              Difficulty
+              <select value={botDifficulty} onChange={(event) => setBotDifficulty(event.target.value as BotDifficulty)}>
+                <option value="easy">Easy</option>
+                <option value="normal">Normal</option>
+                <option value="hard">Hard</option>
+              </select>
+            </label>
+          )}
           <button type="button" onClick={undo} disabled={history.length === 0}>
             Undo
           </button>
@@ -785,13 +797,23 @@ function boardPoint(square: Square) {
   };
 }
 
-function chooseBotMove(state: GameState): Move | null {
+function chooseBotMove(state: GameState, difficulty: BotDifficulty = "hard"): Move | null {
   const moves = getLegalMoves(state);
   if (moves.length === 0) {
     return null;
   }
 
-  return [...moves].sort((a, b) => scoreBotMove(state, b) - scoreBotMove(state, a))[0];
+  if (difficulty === "easy") {
+    return moves[Math.floor(Math.random() * moves.length)];
+  }
+
+  if (difficulty === "normal") {
+    return moves
+      .map((move) => ({ move, score: scoreBotMove(state, move) + Math.random() * 80 }))
+      .sort((a, b) => b.score - a.score)[0].move;
+  }
+
+  return chooseSearchMove(state);
 }
 
 function analyzePosition(state: GameState) {
@@ -799,7 +821,7 @@ function analyzePosition(state: GameState) {
   return {
     score,
     whitePercent: Math.max(6, Math.min(94, 50 + score / 40)),
-    bestMove: chooseBotMove(state)
+    bestMove: chooseBotMove(state, "hard")
   };
 }
 
@@ -829,6 +851,37 @@ function scoreBotMove(state: GameState, move: Move): number {
   return score;
 }
 
+function chooseSearchMove(state: GameState): Move {
+  const moves = getLegalMoves(state);
+  const maximizing = state.turn === "white";
+  const candidates = [...moves]
+    .sort((a, b) => scoreBotMove(state, b) - scoreBotMove(state, a))
+    .slice(0, 24);
+
+  return candidates
+    .map((move) => ({
+      move,
+      score: minimax(applyMove(state, move), 1)
+    }))
+    .sort((a, b) => (maximizing ? b.score - a.score : a.score - b.score))[0].move;
+}
+
+function minimax(state: GameState, depth: number): number {
+  const result = detectGameResult(state);
+  if (result.status === "win") {
+    return result.winner === "white" ? 100000 : -100000;
+  }
+  if (result.status === "draw" || depth === 0) {
+    return evaluatePosition(state);
+  }
+
+  const moves = getLegalMoves(state)
+    .sort((a, b) => scoreBotMove(state, b) - scoreBotMove(state, a))
+    .slice(0, 24);
+  const scores = moves.map((move) => minimax(applyMove(state, move), depth - 1));
+  return state.turn === "white" ? Math.max(...scores) : Math.min(...scores);
+}
+
 function pieceValue(type: PieceType): number {
   if (type === "queen") return 900;
   if (type === "rook") return 500;
@@ -855,11 +908,8 @@ function describeMoveLabel(move: Move): string {
 function bishopFlightStyle(animation: BishopAnimation): CSSProperties {
   const targetX = (animation.to.x + 0.5) * 12.5;
   const targetY = (animation.to.y + 0.5) * 12.5;
-  const deltaX = animation.from.x - animation.to.x;
-  const deltaY = animation.from.y - animation.to.y;
-  const scale = Math.max(Math.abs(deltaX), Math.abs(deltaY), 1);
-  const startX = targetX + (deltaX / scale) * 28;
-  const startY = targetY + (deltaY / scale) * 28;
+  const startX = (animation.from.x + 0.5) * 12.5;
+  const startY = (animation.from.y + 0.5) * 12.5;
 
   return {
     "--flight-start-x": `${startX}%`,

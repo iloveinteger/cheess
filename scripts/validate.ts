@@ -119,6 +119,51 @@ function promotedKingCanCastleWithUnmovedRook() {
   assert(castle, "a promoted king should retain fresh castling rights until it moves");
 }
 
+function promotedRookCanCastleWithUnmovedKing() {
+  const state = buildStateForTest([
+    { square: at(0, 1), piece: piece("w1", "white", "pawn") },
+    { square: at(4, 0), piece: piece("w2", "white", "king") },
+    { square: at(7, 7), piece: piece("b1", "black", "rook") }
+  ]);
+  const promotion = findMove(getLegalMoves(state), "promotion", (candidate) => candidate.promoteTo === "rook");
+  assert(promotion, "pawn should be able to promote to a rook");
+  const promoted = applyMove(state, promotion);
+  assert(promoted.board[0][0]?.type === "rook" && promoted.board[0][0]?.hasMoved === false, "promoted rook should be unmoved");
+  const blackPass = findMove(getLegalMoves(promoted), "move", () => true);
+  assert(blackPass, "black should have a pass-through move for this validation");
+  const whiteToMove = applyMove(promoted, blackPass);
+  const castle = generateCastlingMoves(whiteToMove).find(
+    (move) =>
+      move.kind === "castle" &&
+      move.kingFrom.x === 4 &&
+      move.kingFrom.y === 0 &&
+      move.rookFrom.x === 0 &&
+      move.rookFrom.y === 0
+  );
+  assert(castle, "a promoted rook should retain fresh castling rights until it moves");
+}
+
+function unmovedKingCanCastleVerticallyWithUnmovedRook() {
+  const state = buildStateForTest([
+    { square: at(4, 7), piece: piece("w1", "white", "king") },
+    { square: at(4, 3), piece: piece("w2", "white", "rook") },
+    { square: at(7, 0), piece: piece("b1", "black", "rook") }
+  ]);
+  const castle = generateCastlingMoves(state).find(
+    (move) =>
+      move.kind === "castle" &&
+      move.kingFrom.x === 4 &&
+      move.kingFrom.y === 7 &&
+      move.rookFrom.x === 4 &&
+      move.rookFrom.y === 3 &&
+      move.kingTo.x === 4 &&
+      move.kingTo.y === 5 &&
+      move.rookTo.x === 4 &&
+      move.rookTo.y === 6
+  );
+  assert(castle, "unmoved king should castle along a clear file with an unmoved rook");
+}
+
 function infiniteBishopDeploysFromOffBoard() {
   const state = buildStateForTest([
     { square: at(0, 7), piece: piece("w1", "white", "rook") },
@@ -165,6 +210,8 @@ const tests = [
   pawnCanPromoteToKing,
   anyUnmovedKingCanCastleWithUnmovedRook,
   promotedKingCanCastleWithUnmovedRook,
+  promotedRookCanCastleWithUnmovedKing,
+  unmovedKingCanCastleVerticallyWithUnmovedRook,
   infiniteBishopDeploysFromOffBoard,
   royalReproductionSpawnsPawn,
   stalemateReturnsDraw

@@ -173,7 +173,10 @@ export function applyMove(state: GameState, move: Move): GameState {
     next.board[move.to.y][move.to.x] = {
       ...piece,
       type: move.kind === "promotion" ? move.promoteTo : piece.type,
-      hasMoved: move.kind === "promotion" && move.promoteTo === "king" ? false : true
+      hasMoved:
+        move.kind === "promotion" && (move.promoteTo === "king" || move.promoteTo === "rook")
+          ? false
+          : true
     };
 
     if (
@@ -329,19 +332,25 @@ export function generateCastlingMoves(state: GameState): Move[] {
 
   for (const king of kings) {
     for (const rook of rooks) {
-      if (king.square.y !== rook.square.y) {
+      const sameRank = king.square.y === rook.square.y;
+      const sameFile = king.square.x === rook.square.x;
+      if (!sameRank && !sameFile) {
         continue;
       }
-      const dx = rook.square.x - king.square.x;
-      if (Math.abs(dx) < 3) {
+      const dx = Math.sign(rook.square.x - king.square.x);
+      const dy = Math.sign(rook.square.y - king.square.y);
+      const distance = Math.max(
+        Math.abs(rook.square.x - king.square.x),
+        Math.abs(rook.square.y - king.square.y)
+      );
+      if (distance < 3) {
         continue;
       }
-      if (!isClearHorizontal(state.board, king.square, rook.square)) {
+      if (!isClearLine(state.board, king.square, rook.square)) {
         continue;
       }
-      const direction = Math.sign(dx);
-      const kingTo = { x: king.square.x + direction * 2, y: king.square.y };
-      const rookTo = { x: king.square.x + direction, y: king.square.y };
+      const kingTo = { x: king.square.x + dx * 2, y: king.square.y + dy * 2 };
+      const rookTo = { x: king.square.x + dx, y: king.square.y + dy };
       if (
         !inBounds(kingTo) ||
         !inBounds(rookTo) ||
@@ -685,13 +694,15 @@ function repetitionKey(state: GameState): string {
   return `${rows.join("/")}|${state.turn}|${state.infiniteBishopUsed.white}|${state.infiniteBishopUsed.black}|${ep}`;
 }
 
-function isClearHorizontal(board: Board, a: Square, b: Square): boolean {
-  const min = Math.min(a.x, b.x);
-  const max = Math.max(a.x, b.x);
-  for (let x = min + 1; x < max; x += 1) {
-    if (board[a.y][x]) {
+function isClearLine(board: Board, a: Square, b: Square): boolean {
+  const dx = Math.sign(b.x - a.x);
+  const dy = Math.sign(b.y - a.y);
+  let cursor = { x: a.x + dx, y: a.y + dy };
+  while (!sameSquare(cursor, b)) {
+    if (board[cursor.y][cursor.x]) {
       return false;
     }
+    cursor = { x: cursor.x + dx, y: cursor.y + dy };
   }
   return true;
 }

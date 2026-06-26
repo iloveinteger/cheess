@@ -44,12 +44,12 @@ Castling is legal when:
 
 - The king has never moved.
 - The rook has never moved.
-- The king and rook are on the same rank.
+- The king and rook are on the same rank or file.
 - Every square between the king and rook is empty.
 
 Because check does not exist, a king may castle out of attack, through attacked squares, or into attack.
 
-Castling rights belong to each individual king and rook. Once a king or rook moves, that piece permanently loses castling rights. Promoted kings may castle if they have never moved.
+Castling rights belong to each individual king and rook. Once a king or rook moves, that piece permanently loses castling rights. Promoted kings and promoted rooks may castle if they have never moved after promotion.
 
 ### Forced En Passant
 
